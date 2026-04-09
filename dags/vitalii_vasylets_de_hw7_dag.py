@@ -1,38 +1,47 @@
 from airflow import DAG
-from airflow.operators.python import PythonOperator, BranchPythonOperator
-from airflow.operators.mysql_operator import MySqlOperator
-from airflow.utils.trigger_rule import TriggerRule as tr
+from airflow.providers.standard.operators.python import PythonOperator, BranchPythonOperator
+from airflow.providers.common.sql.operators.sql import SQLExecuteQueryOperator
+from airflow.task.trigger_rule import TriggerRule as tr
 from airflow.utils.state import State
-from airflow.sensors.sql import SqlSensor
+from airflow.providers.common.sql.sensors.sql import SqlSensor
 from datetime import datetime
 import random
 import time
 
 # Функція для примусового встановлення статусу DAG як успішного
+
+
 def mark_dag_success(ti, **kwargs):
     dag_run = kwargs['dag_run']
     dag_run.set_state(State.SUCCESS)
 
 # Функція для генерації медалей
+
+
 def generate_medal():
-    medal = random.choice(["Gold","Silver","Bronze"])
+    medal = random.choice(["Gold", "Silver", "Bronze"])
     print(f"Generated medal: {medal}")
     return medal
 
 #  Функція вибору значення що запускає одне із трьох завдань (розгалуження).
+
+
 def branching_on_medal(**kwargs):
-        medal = kwargs["ti"].xcom_pull(task_ids="generate_medal")
-        if medal == "Gold":
-            return "count_gold_medals"
-        elif medal == "Silver":
-            return "count_silver_medals"
-        else:
-            return "count_bronze_medals"
+    medal = kwargs["ti"].xcom_pull(task_ids="generate_medal")
+    if medal == "Gold":
+        return "count_gold_medals"
+    elif medal == "Silver":
+        return "count_silver_medals"
+    else:
+        return "count_bronze_medals"
 
 # Функція затримки часу
+
+
 def delay_func():
     print("Sleeping for 34 seconds...")
-    time.sleep(34)
+    time.sleep(35)
+
 
 # Визначення DAG
 default_args = {
@@ -46,24 +55,24 @@ connection_name = "goit_mysql_db"
 with DAG(
         'vitalii_vasylets_de_hw7_dag',
         default_args=default_args,
-        schedule_interval=None,
+        schedule=None,
         catchup=False,
         tags=["vitalii_vasylets_de_hw7_dag"]
 ) as dag:
 
     # Завдання для створення схеми бази даних (якщо не існує)
-    create_schema = MySqlOperator(
+    create_schema = SQLExecuteQueryOperator(
         task_id='create_schema',
-        mysql_conn_id=connection_name,
+        conn_id=connection_name,
         sql="""
         CREATE DATABASE IF NOT EXISTS vitalii_vasylets;
         """
     )
 
     # Завдання для створення таблиці для зберігання медалей (якщо не існує)
-    create_table = MySqlOperator(
+    create_table = SQLExecuteQueryOperator(
         task_id='create_table',
-        mysql_conn_id=connection_name,
+        conn_id=connection_name,
         sql="""
         CREATE TABLE IF NOT EXISTS vitalii_vasylets.medals(
         id INT AUTO_INCREMENT PRIMARY KEY,
@@ -73,7 +82,7 @@ with DAG(
         );
         """
     )
-    
+
     # Випадково обирає одне із трьох значень ['Bronze', 'Silver', 'Gold'].
     generate_medal_task = PythonOperator(
         task_id='generate_medal',
@@ -89,9 +98,9 @@ with DAG(
     # Завдання рахує кількість записів у таблиці olympic_dataset.athlete_event_results,
     # що містять запис Bronze у полі medal, та записує отримане значення в таблицю, створену в пункті 1,
     # разом із типом медалі та часом створення запису.
-    count_bronze_medals_task = MySqlOperator(
+    count_bronze_medals_task = SQLExecuteQueryOperator(
         task_id="count_bronze_medals",
-        mysql_conn_id=connection_name,
+        conn_id=connection_name,
         sql="""
            INSERT INTO vitalii_vasylets.medals (medal_type, count)
            SELECT 'Bronze', COUNT(*)
@@ -103,9 +112,9 @@ with DAG(
     # Завдання рахує кількість записів у таблиці olympic_dataset.athlete_event_results,
     # що містять запис Silver у полі medal, та записує отримане значення в таблицю, створену в пункті 1,
     # разом із типом медалі та часом створення запису.
-    count_silver_medals_task = MySqlOperator(
+    count_silver_medals_task = SQLExecuteQueryOperator(
         task_id="count_silver_medals",
-        mysql_conn_id=connection_name,
+        conn_id=connection_name,
         sql="""
            INSERT INTO vitalii_vasylets.medals (medal_type, count)
            SELECT 'Silver', COUNT(*)
@@ -114,12 +123,12 @@ with DAG(
            """,
     )
 
-    # Завдання рахує кількість записів у таблиці olympic_dataset.athlete_event_results, 
-    # що містять запис Gold у полі medal, та записує отримане значення в таблицю, створену в пункті 1, 
+    # Завдання рахує кількість записів у таблиці olympic_dataset.athlete_event_results,
+    # що містять запис Gold у полі medal, та записує отримане значення в таблицю, створену в пункті 1,
     # разом із типом медалі та часом створення запису.
-    count_gold_medals_task = MySqlOperator(
+    count_gold_medals_task = SQLExecuteQueryOperator(
         task_id="count_gold_medals",
-        mysql_conn_id=connection_name,
+        conn_id=connection_name,
         sql="""
            INSERT INTO vitalii_vasylets.medals (medal_type, count)
            SELECT 'Gold', COUNT(*)
@@ -157,18 +166,20 @@ with DAG(
     # Завдання для примусового встановлення статусу DAG як успішного в разі невдачі
     mark_success_task = PythonOperator(
         task_id='mark_success',
-        trigger_rule=tr.ONE_FAILED,  # Виконати, якщо хоча б одне попереднє завдання завершилося невдачею
+        # Виконати, якщо хоча б одне попереднє завдання завершилося невдачею
+        trigger_rule=tr.ONE_FAILED,
         python_callable=mark_dag_success,
     )
 
     # Встановлення залежностей
     create_schema >> create_table >> generate_medal_task >> branching_task
-    (branching_task >> [count_bronze_medals_task, count_silver_medals_task, count_gold_medals_task] >> delay_task)
+    (branching_task >> [count_bronze_medals_task,
+     count_silver_medals_task, count_gold_medals_task] >> delay_task)
     delay_task >> check_if_last_record_task
     [
-    count_bronze_medals_task,
-    count_silver_medals_task,
-    count_gold_medals_task,
-    delay_task,
-    check_if_last_record_task
-] >> mark_success_task
+        count_bronze_medals_task,
+        count_silver_medals_task,
+        count_gold_medals_task,
+        delay_task,
+        check_if_last_record_task
+    ] >> mark_success_task
